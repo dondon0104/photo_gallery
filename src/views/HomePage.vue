@@ -20,6 +20,7 @@
           <CamComponents @capture="capturePhoto" />
           <PhotoGalleryComponents :photos="photos" />
         </div>
+        <p v-if="firebaseError" class="firebase-error">{{ firebaseError }}</p>
       </main>
     </ion-content>
   </ion-page>
@@ -28,22 +29,62 @@
 <script setup lang="ts">
 import { IonContent, IonIcon, IonPage } from '@ionic/vue'
 import { Camera, CameraResultType, CameraSource } from '@capacitor/camera'
+import { get, push, ref as databaseRef, set } from 'firebase/database'
 import { apertureOutline } from 'ionicons/icons'
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import CamComponents from '../components/CamComponents.vue'
 import PhotoGalleryComponents from '../components/PhotoGalleryComponents.vue'
+import { database } from '../firebase'
 
 const photos = ref<string[]>([])
+const firebaseError = ref('')
+
+onMounted(async () => {
+  try {
+    const snapshot = await get(databaseRef(database, 'photos'))
+    const savedPhotos = snapshot.val() as Record<string, { url: string; createdAt: number }> | null
+
+    if (savedPhotos) {
+      photos.value = Object.values(savedPhotos)
+        .filter((photo) => photo && typeof photo.url === 'string' && typeof photo.createdAt === 'number')
+        .sort((first, second) => first.createdAt - second.createdAt)
+        .map((photo) => photo.url)
+    }
+  } catch (error) {
+    firebaseError.value = getErrorMessage(error, 'Unable to load photos from Firebase.')
+    console.error('Unable to load saved photos.', error)
+  }
+})
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? `${fallback} ${error.message}` : fallback
+}
 
 async function capturePhoto() {
-  const image = await Camera.getPhoto({
-    quality: 90,
-    resultType: CameraResultType.DataUrl,
-    source: CameraSource.Camera,
-  })
+  try {
+    const image = await Camera.getPhoto({
+      quality: 90,
+      resultType: CameraResultType.DataUrl,
+      source: CameraSource.Camera,
+    })
 
-  if (image.dataUrl) {
-    photos.value = [...photos.value, image.dataUrl]
+    if (image.dataUrl) {
+      const photoId = push(databaseRef(database, 'photos')).key
+
+      if (!photoId) {
+        throw new Error('Unable to create a Firebase photo id.')
+      }
+
+      await set(databaseRef(database, `photos/${photoId}`), {
+        url: image.dataUrl,
+        createdAt: Date.now(),
+      })
+
+      photos.value = [...photos.value, image.dataUrl]
+    }
+  } catch (error) {
+    firebaseError.value = getErrorMessage(error, 'Unable to save the photo to Firebase.')
+    console.error('Unable to capture photo.', error)
   }
 }
 </script>
@@ -62,6 +103,7 @@ ion-content { --background: #e8eee8; }
 .intro h2 { color: #203638; font-family: Georgia, 'Times New Roman', serif; font-size: clamp(42px, 7vw, 76px); font-weight: 400; letter-spacing: -0.02em; line-height: 0.96; margin: 10px 0 0; }
 .intro em { color: #49816f; font-style: italic; }
 .studio-grid { align-items: start; display: grid; gap: 24px; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); }
+.firebase-error { color: #a13c35; font-size: 13px; margin: 16px 0 0; }
 
 @media (max-width: 720px) {
   .studio-shell { padding: 28px 18px 44px; }
